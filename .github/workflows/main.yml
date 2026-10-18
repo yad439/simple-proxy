@@ -34,7 +34,6 @@ jobs:
         make VERSION="${VERSION}"
         make zip
     - name: Upload release assets
-      if: github.event_name == 'release'
       uses: actions/upload-artifact@v7
       with:
         name: release-assets
