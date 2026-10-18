@@ -40,6 +40,10 @@ func main() {
 	flag.StringVar(&socks5, "socks5", "", "SOCKS5 proxy for tunneling, not used if not provided")
 	var socks5Auth string
 	flag.StringVar(&socks5Auth, "socks5-auth", "", "basic auth for socks5, format 'username:password', no auth if not provided")
+	var httpForwardAddr string
+	flag.StringVar(&httpForwardAddr, "http-proxy", "", "upstream HTTP proxy 'host:port' for tunneling, not used if not provided")
+	var httpForwardAuth string
+	flag.StringVar(&httpForwardAuth, "http-proxy-auth", "", "basic auth for upstream HTTP proxy, format 'username:password', no auth if not provided")
 	var certPath string
 	flag.StringVar(&certPath, "cert", "", "path to cert file")
 	var keyPath string
@@ -83,6 +87,23 @@ func main() {
 		}
 	}
 
+	if httpForwardAddr != "" && socks5 != "" {
+		glog.Fatalln("--http-proxy and --socks5 cannot be used together")
+	}
+
+	var httpForward *proxy.HTTPForward
+	if httpForwardAddr != "" {
+		httpForward = &proxy.HTTPForward{Address: httpForwardAddr}
+		if httpForwardAuth != "" {
+			parts := strings.SplitN(httpForwardAuth, ":", 2)
+			if len(parts) < 2 {
+				glog.Fatalln("Invalid http-proxy-auth provided, must be in format 'username:password'")
+			}
+			httpForward.Username = &parts[0]
+			httpForward.Password = &parts[1]
+		}
+	}
+
 	var handler http.Handler
 	if basicAuth == "" {
 		handler = &proxy.ProxyHandler{
@@ -90,6 +111,7 @@ func main() {
 			LogAuth:       logAuth,
 			LogHeaders:    logHeaders,
 			Socks5Forward: socks5Forward,
+			HTTPForward:   httpForward,
 		}
 	} else {
 		parts := strings.Split(basicAuth, ":")
@@ -103,6 +125,7 @@ func main() {
 			LogAuth:       logAuth,
 			LogHeaders:    logHeaders,
 			Socks5Forward: socks5Forward,
+			HTTPForward:   httpForward,
 		}
 	}
 

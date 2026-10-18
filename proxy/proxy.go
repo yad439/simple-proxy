@@ -1,11 +1,15 @@
 package proxy
 
 import (
+	"bufio"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang/glog"
@@ -25,6 +29,75 @@ type ProxyHandler struct {
 	LogAuth       bool
 	LogHeaders    bool
 	Socks5Forward *Socks5Forward
+	HTTPForward   *HTTPForward
+
+	transportOnce sync.Once
+	transport     http.RoundTripper
+}
+
+type HTTPForward struct {
+	Address  string
+	Username *string
+	Password *string
+}
+
+func (f *HTTPForward) authHeader() string {
+	if f.Username == nil || f.Password == nil {
+		return ""
+	}
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(*f.Username+":"+*f.Password))
+}
+
+func (f *HTTPForward) dial(host string, timeout time.Duration) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp", f.Address, timeout)
+	if err != nil {
+		return nil, err
+	}
+	conn.SetDeadline(time.Now().Add(timeout))
+	req := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Opaque: host},
+		Host:   host,
+		Header: http.Header{},
+	}
+	if auth := f.authHeader(); auth != "" {
+		req.Header.Set("Proxy-Authorization", auth)
+	}
+	if err := req.Write(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		conn.Close()
+		return nil, fmt.Errorf("upstream proxy refused CONNECT: %s", resp.Status)
+	}
+	conn.SetDeadline(time.Time{})
+	if br.Buffered() > 0 {
+		return &bufferedConn{Conn: conn, r: br}, nil
+	}
+	return conn, nil
+}
+
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *bufferedConn) Read(b []byte) (int, error) { return c.r.Read(b) }
+
+func (f *HTTPForward) transport() *http.Transport {
+	u := &url.URL{Scheme: "http", Host: f.Address}
+	t := &http.Transport{Proxy: http.ProxyURL(u)}
+	if auth := f.authHeader(); auth != "" {
+		t.ProxyConnectHeader = http.Header{"Proxy-Authorization": {auth}}
+	}
+	return t
 }
 
 type Socks5Forward struct {
@@ -56,17 +129,30 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if r.Method == http.MethodConnect {
-		handleTunneling(w, r, p.Timeout, p.Socks5Forward)
+		handleTunneling(w, r, p.Timeout, p.Socks5Forward, p.HTTPForward)
 	} else {
-		handleHTTP(w, r)
+		handleHTTP(w, r, p.httpTransport())
 	}
 }
 
-func handleTunneling(w http.ResponseWriter, r *http.Request, timeout time.Duration, socks5Forward *Socks5Forward) {
+func (p *ProxyHandler) httpTransport() http.RoundTripper {
+	p.transportOnce.Do(func() {
+		if p.HTTPForward != nil {
+			p.transport = p.HTTPForward.transport()
+		} else {
+			p.transport = http.DefaultTransport
+		}
+	})
+	return p.transport
+}
+
+func handleTunneling(w http.ResponseWriter, r *http.Request, timeout time.Duration, socks5Forward *Socks5Forward, httpForward *HTTPForward) {
 	var destConn net.Conn
 	var err error
 
-	if socks5Forward == nil {
+	if httpForward != nil {
+		destConn, err = httpForward.dial(r.Host, timeout)
+	} else if socks5Forward == nil {
 		destConn, err = net.DialTimeout("tcp", r.Host, timeout)
 	} else {
 		var socks5Auth *netProxy.Auth
@@ -123,8 +209,8 @@ func transfer(destination io.WriteCloser, source io.ReadCloser) {
 	io.Copy(destination, source)
 }
 
-func handleHTTP(w http.ResponseWriter, req *http.Request) {
-	resp, err := http.DefaultTransport.RoundTrip(req)
+func handleHTTP(w http.ResponseWriter, req *http.Request, transport http.RoundTripper) {
+	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		glog.Errorf("Failed to proxy request, %s\n", err.Error())
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)

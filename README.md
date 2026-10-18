@@ -18,7 +18,7 @@ Code based on the guide here: <https://medium.com/@mlowicki/http-s-proxy-in-gola
 - Can log request headers
 - Can log failed authentication attempt details
 - Printing version number
-- Tunnelling HTTP proxy to SOCKS5 proxy
+- Tunnelling HTTP proxy to SOCKS5 or HTTP proxy
 
 ## Install
 
@@ -89,6 +89,10 @@ Usage of simple-proxy:
     	proxy port to listen on (default "8888")
   -protocol string
     	proxy protocol (http or https) (default "http")
+  -http-proxy string
+	upstream HTTP proxy 'host:port' for tunneling, not used if not provided
+  -http-proxy-auth string
+	basic auth for upstream HTTP proxy, format 'username:password', no auth if not provided
   -socks5 string
     	SOCKS5 proxy for tunneling, not used if not provided
   -socks5-auth string
@@ -104,6 +108,23 @@ Usage of simple-proxy:
   -vmodule value
     	comma-separated list of pattern=N settings for file-filtered logging
 ```
+
+### Forwarding through another HTTP proxy
+
+Use `--http-proxy` to send requests through an upstream HTTP proxy. The address is a `host:port` pair. For example:
+
+```bash
+./simple-proxy --http-proxy upstream.example.com:3128
+```
+
+Clients connect to this proxy, which forwards HTTP requests and HTTPS `CONNECT` tunnels through the upstream proxy.
+For an upstream proxy requiring Basic authentication, provide `--http-proxy-auth username:password`:
+
+```bash
+./simple-proxy --http-proxy upstream.example.com:3128 --http-proxy-auth user:password
+```
+
+`--http-proxy` and `--socks5` are mutually exclusive. The `--http-proxy-auth` option is only used with `--http-proxy`.
 
 ## Checking the proxy is working
 
