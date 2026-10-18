@@ -48,7 +48,7 @@ zip:
 
 lint:
 	@echo "=============Linting============="
-	go run honnef.co/go/tools/cmd/staticcheck@v0.6.0 ./...
+	go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 
 format:
 	@echo "=============Formatting============="
